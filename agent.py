@@ -335,15 +335,31 @@ def quote(term):
     return '"' + term + '"' if " " in term else term
 
 def detect_city(text):
-    if contains(text, "רעננה"):
-        return "רעננה"
-    if contains(text, "כפר סבא"):
-        return "כפר סבא"
-    if contains(text, "הרצליה"):
-        return "הרצליה"
-    if contains(text, "דרום השרון") or contains(text, "מועצה אזורית דרום השרון"):
-        return "דרום השרון"
-    return "אזור השרון"
+    """מחזיר את מילת החיפוש הספציפית ביותר שנמצאה בטקסט — להצגה בכותרת."""
+    # 1. עדיפות ראשונה: מוסד / שכונה / אתר ספציפי (הכי אינפורמטיבי)
+    specific = hits(text, BODIES_AND_INSTITUTIONS + CULTURE_ATTRACTIONS + PLACES)
+    if specific:
+        return specific[0]
+    # 2. עיר ספציפית לפי סדר עדיפות
+    city_order = [
+        ("קריית ביאליק", ["קריית ביאליק", "קרית ביאליק"]),
+        ("קריית מוצקין", ["קריית מוצקין", "קרית מוצקין"]),
+        ("קריית ים", ["קריית ים", "קרית ים"]),
+        ("קריית אתא", ["קריית אתא", "קרית אתא"]),
+        ("טירת כרמל", ["טירת כרמל", "טירת הכרמל"]),
+        ("נשר", ["נשר"]),
+        ("חוף הכרמל", ["חוף הכרמל"]),
+        ("חיפה", ["חיפה"]),
+        ("הקריות", ["הקריות"]),
+    ]
+    for label, variants in city_order:
+        if any(contains(text, v) for v in variants):
+            return label
+    # 3. אם נמצאה אישיות/גוף אחר — הצג אותו
+    other = hits(text, PEOPLE + COMMERCE_SPORT_HEALTH + COMPANIES + TRANSPORT)
+    if other:
+        return other[0]
+    return "חיפה והקריות"
 
 def source_from_title(title):
     if " - " in title:
@@ -636,6 +652,12 @@ def fetch(query):
             src_name = source_from_title(title)
 
         if is_sport_source(src_name, src_href):
+            continue
+
+        # חסימת כלבו חיפה עצמו — לפי שם המקור או כתובת המקור
+        # (הקישור מגוגל ניוז מוסתר, לכן בודקים את שם/דומיין המקור)
+        blob = norm(src_name) + " " + norm(src_href)
+        if any(p in blob for p in BLOCKED_URL_PATTERNS):
             continue
 
         if not is_recent(entry):
