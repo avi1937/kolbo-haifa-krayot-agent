@@ -536,28 +536,50 @@ def db():
     return True
 
 def load_recent_sent(client=None, days=4):
-    """טוען מ-Supabase את כל מה שכבר נשלח בימים האחרונים, כדי למנוע כפילויות."""
+    """טוען מ-Supabase את כל הידיעות שכבר נרשמו/נשלחו בימים האחרונים, כדי למנוע כפילויות.
+
+    שני תיקונים חשובים למניעת כפילויות שחזרו:
+    1) עימוד מלא (pagination): PostgREST מחזיר כברירת מחדל עד ~1000 שורות בבקשה אחת.
+       כשהטבלה גדלה מעבר לכך, חלק מהשורות "נחתכו" ולא נטענו, וידיעה שכבר נשלחה
+       (למשל אותה ידיעה מנווה יוסף) נראתה חדשה ונשלחה שוב ושוב. עכשיו טוענים את *כל*
+       השורות בעמודים.
+    2) טוענים כל שורה שנרשמה (כולל 'pending'), ולא רק כאלה עם sent_at,
+       כדי שגם אם סימון 'נשלח' נכשל פעם אחת, לא נשלח את אותה ידיעה שוב.
+    """
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     sent_ids, sent_tkeys = set(), set()
 
-    resp = _sb_request(
-        "GET", TABLE, "load_recent_sent",
-        params={
-            "select": "id,title_key,sent_at",
-            "first_seen_at": f"gte.{cutoff}",
-            "sent_at": "not.is.null",
-        },
-    )
-    if resp is not None:
+    page_size = 1000
+    offset = 0
+    while True:
+        resp = _sb_request(
+            "GET", TABLE, "load_recent_sent",
+            params={
+                "select": "id,title_key",
+                "first_seen_at": f"gte.{cutoff}",
+                "order": "first_seen_at.desc",
+            },
+            headers={"Range-Unit": "items", "Range": f"{offset}-{offset + page_size - 1}"},
+        )
+        if resp is None:
+            break
         try:
-            for row in resp.json():
-                if row.get("sent_at"):
-                    if row.get("id"):
-                        sent_ids.add(row["id"])
-                    if row.get("title_key"):
-                        sent_tkeys.add(row["title_key"])
+            rows = resp.json()
         except Exception as e:
             print("load_recent_sent parse failed:", e)
+            break
+        if not rows:
+            break
+        for row in rows:
+            if row.get("id"):
+                sent_ids.add(row["id"])
+            if row.get("title_key"):
+                sent_tkeys.add(row["title_key"])
+        if len(rows) < page_size:
+            break
+        offset += page_size
+
+    print(f"load_recent_sent: נטענו {len(sent_tkeys)} מפתחות ידיעה מ-{days} הימים האחרונים")
     return sent_ids, sent_tkeys
 
 def _row_from_item(item, now):
